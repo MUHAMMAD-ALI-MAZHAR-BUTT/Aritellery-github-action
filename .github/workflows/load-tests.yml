@@ -25,7 +25,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.13" # Mandatory for Artillery 2.x
+          node-version: "22.13"
           cache: "npm"
 
       - name: Install Dependencies
@@ -68,11 +68,11 @@ jobs:
 
           # Set environment specific vars
           if [ "$ENVIRONMENT" = "signet" ]; then
-            export SIGNET_API_KEY="$SIGNET_API_KEY"
-            export SIGNET_API_URL="$SIGNET_API_URL"
+            export API_KEY="$SIGNET_API_KEY"
+            export API_URL="$SIGNET_API_URL"
           else
-            export MAINNET_API_KEY="$MAINNET_API_KEY"
-            export MAINNET_API_URL="$MAINNET_API_URL"
+            export API_KEY="$MAINNET_API_KEY"
+            export API_URL="$MAINNET_API_URL"
           fi
 
           echo "🚀 Starting ${{ inputs.test-case }} on $ENVIRONMENT"
@@ -85,4 +85,7 @@ jobs:
           aws s3 cp "$REPORT_NAME" "$S3_PATH"
 
           echo "📊 Publishing to Artillery Dashboard"
-          artillery publish "$REPORT_NAME"
+          artillery report --key "$ARTILLERY_API_KEY" "$REPORT_NAME"
+
+          # Verify dashboard upload
+          echo "✅ Report ID: $(jq -r .reportId $REPORT_NAME)"
