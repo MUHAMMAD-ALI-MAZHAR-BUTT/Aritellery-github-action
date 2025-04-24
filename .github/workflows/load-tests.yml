@@ -26,7 +26,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22.13"
+          node-version: "18"
           cache: "npm"
 
       - name: Install Dependencies
@@ -54,39 +54,52 @@ jobs:
         run: |
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
           ENVIRONMENT="${{ inputs.environment }}"
-          REPORT_NAME="${{ inputs.test-case }}-${ENVIRONMENT}-${TIMESTAMP}.json"
-          S3_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENVIRONMENT}/${REPORT_NAME}"
+          REPORT_JSON="${{ inputs.test-case }}-${ENVIRONMENT}-${TIMESTAMP}.json"
+          REPORT_HTML="${{ inputs.test-case }}-${ENVIRONMENT}-${TIMESTAMP}.html"
+          S3_JSON_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENVIRONMENT}/json/${REPORT_JSON}"
+          S3_HTML_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENVIRONMENT}/html/${REPORT_HTML}"
           TEST_FILE="test/load/configs/${{ inputs.test-case }}.yml"
 
-          # Verify file structure
-          echo "📂 Current directory structure:"
-          ls -la test/load/configs/
+          # Create reports directory
+          mkdir -p test/load/reports
 
+          # Verify test file exists
           if [ ! -f "$TEST_FILE" ]; then
             echo "❌ Error: Missing test file at $TEST_FILE"
             exit 1
           fi
 
-          # Set environment specific variables
+          # Set environment variables
           if [ "$ENVIRONMENT" = "signet" ]; then
-            export SIGNET_API_KEY="$SIGNET_API_KEY"
-            export SIGNET_API_URL="$SIGNET_API_URL"
+            export API_KEY="$SIGNET_API_KEY"
+            export API_URL="$SIGNET_API_URL"
           else
-            export MAINNET_API_KEY="$MAINNET_API_KEY"
-            export MAINNET_API_URL="$MAINNET_API_URL"
+            export API_KEY="$MAINNET_API_KEY"
+            export API_URL="$MAINNET_API_URL"
           fi
 
+          # Run artillery test
           echo "🚀 Starting ${{ inputs.test-case }} on $ENVIRONMENT"
           artillery run \
-            --record --key "$ARTILLERY_API_KEY" \
             --environment $ENVIRONMENT \
-            "$TEST_FILE" \
-            --output "$REPORT_NAME"
+            --record --key "$ARTILLERY_API_KEY" \
+            --output "test/load/reports/$REPORT_JSON" \
+            "$TEST_FILE"
 
-          echo "📤 Uploading to S3: $S3_PATH"
-          aws s3 cp "$REPORT_NAME" "$S3_PATH"
+          # Generate HTML report
+          echo "📊 Generating HTML report"
+          artillery report \
+            --output "test/load/reports/$REPORT_HTML" \
+            "test/load/reports/$REPORT_JSON"
 
-          # Get report ID from results
-          REPORT_ID=$(jq -r '.metadata."artillery.io/record".id' "$REPORT_NAME")
+          # Upload reports to S3
+          echo "📤 Uploading JSON report to S3"
+          aws s3 cp "test/load/reports/$REPORT_JSON" "$S3_JSON_PATH"
+
+          echo "📤 Uploading HTML report to S3"
+          aws s3 cp "test/load/reports/$REPORT_HTML" "$S3_HTML_PATH"
+
+          # Get Artillery report ID
+          REPORT_ID=$(jq -r '.metadata."artillery.io/record".id' "test/load/reports/$REPORT_JSON")
           echo "✅ Artillery Cloud Report: https://app.artillery.io/reports/$REPORT_ID"
           echo "::set-output name=report_url::https://app.artillery.io/reports/$REPORT_ID"
