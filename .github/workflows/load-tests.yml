@@ -20,13 +20,13 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          ref: 'test/load-testing'
+          ref: "test/load-testing"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          cache: 'npm'
+          node-version: "22.13" # Mandatory for Artillery 2.x
+          cache: "npm"
 
       - name: Install Dependencies
         run: |
@@ -55,23 +55,33 @@ jobs:
           ENVIRONMENT="${{ inputs.environment }}"
           REPORT_NAME="${{ inputs.test-case }}-${ENVIRONMENT}-${TIMESTAMP}.json"
           S3_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENVIRONMENT}/${REPORT_NAME}"
+          TEST_FILE="test/load/configs/${{ inputs.test-case }}.yml"
 
-          # Set environment variables
-          if [ "$ENVIRONMENT" = "signet" ]; then
-            export API_KEY="$SIGNET_API_KEY"
-            export API_URL="$SIGNET_API_URL"
-          else
-            export API_KEY="$MAINNET_API_KEY"
-            export API_URL="$MAINNET_API_URL"
+          # Verify file structure
+          echo "📂 Current directory structure:"
+          ls -la test/load/configs/
+
+          if [ ! -f "$TEST_FILE" ]; then
+            echo "❌ Error: Missing test file at $TEST_FILE"
+            exit 1
           fi
 
-          echo "🚀 Starting ${{ inputs.test-case }} test on $ENVIRONMENT"
+          # Set environment specific vars
+          if [ "$ENVIRONMENT" = "signet" ]; then
+            export SIGNET_API_KEY="$SIGNET_API_KEY"
+            export SIGNET_API_URL="$SIGNET_API_URL"
+          else
+            export MAINNET_API_KEY="$MAINNET_API_KEY"
+            export MAINNET_API_URL="$MAINNET_API_URL"
+          fi
+
+          echo "🚀 Starting ${{ inputs.test-case }} on $ENVIRONMENT"
           artillery run \
             --environment $ENVIRONMENT \
-            "test/load/config/${{ inputs.test-case }}.yml" \
+            "$TEST_FILE" \
             --output "$REPORT_NAME"
 
-          echo "📤 Uploading report to S3: $S3_PATH"
+          echo "📤 Uploading to S3: $S3_PATH"
           aws s3 cp "$REPORT_NAME" "$S3_PATH"
 
           echo "📊 Publishing to Artillery Dashboard"
