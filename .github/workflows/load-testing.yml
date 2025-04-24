@@ -37,9 +37,9 @@ jobs:
 
       - name: Configure AWS CLI
         env:
-          AWS_ACCESS_KEY_ID:     ${{ secrets.TESTNET_S3_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.TESTNET_S3_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TESTNET_S3_SECRET_KEY }}
-          AWS_DEFAULT_REGION:    ${{ secrets.TESTNET_S3_REGION }}
+          AWS_DEFAULT_REGION: ${{ secrets.TESTNET_S3_REGION }}
         run: |
           aws configure set aws_access_key_id    "$AWS_ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
@@ -49,10 +49,10 @@ jobs:
         id: run_test
         env:
           ARTILLERY_API_KEY: ${{ secrets.QA_ARTILLERY_API_KEY }}
-          SIGNET_API_KEY:    ${{ secrets.QA_SIGNET_API_KEY }}
-          MAINNET_API_KEY:   ${{ secrets.QA_MAINNET_API_KEY }}
-          SIGNET_API_URL:    ${{ secrets.QA_SIGNET_API_URL }}
-          MAINNET_API_URL:   ${{ secrets.QA_MAINNET_API_URL }}
+          SIGNET_API_KEY: ${{ secrets.QA_SIGNET_API_KEY }}
+          MAINNET_API_KEY: ${{ secrets.QA_MAINNET_API_KEY }}
+          SIGNET_API_URL: ${{ secrets.QA_SIGNET_API_URL }}
+          MAINNET_API_URL: ${{ secrets.QA_MAINNET_API_URL }}
         run: |
           set -e
           TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
@@ -95,7 +95,7 @@ jobs:
           echo "environment=$ENV"          >> $GITHUB_OUTPUT
           echo "testcase=$TEST"            >> $GITHUB_OUTPUT
 
-      - name: Debug: list reports directory
+      - name: "list reports directory"
         run: |
           echo "📂 reports/ contents:"
           ls -lh reports/
