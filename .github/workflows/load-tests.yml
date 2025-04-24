@@ -103,7 +103,7 @@ jobs:
           echo "::set-output name=s3_html::$S3_HTML"
 
       - name: Upload JSON & HTML as artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: load-test-reports
           path: reports/*
