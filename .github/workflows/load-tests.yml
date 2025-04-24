@@ -20,7 +20,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          ref: 'test/load-testing'   
+          ref: 'test/load-testing'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -54,7 +54,7 @@ jobs:
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
           ENVIRONMENT="${{ inputs.environment }}"
           REPORT_NAME="${{ inputs.test-case }}-${ENVIRONMENT}-${TIMESTAMP}.json"
-          S3_PATH="s3://${{ secrets.S3_BUCKET }}/${ENVIRONMENT}/${REPORT_NAME}"
+          S3_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENVIRONMENT}/${REPORT_NAME}"
 
           # Set environment variables
           if [ "$ENVIRONMENT" = "signet" ]; then
@@ -67,7 +67,8 @@ jobs:
 
           echo "🚀 Starting ${{ inputs.test-case }} test on $ENVIRONMENT"
           artillery run \
-            --config "test/load/config/${{ inputs.test-case }}.yml" \
+            --environment $ENVIRONMENT \
+            "test/load/config/${{ inputs.test-case }}.yml" \
             --output "$REPORT_NAME"
 
           echo "📤 Uploading report to S3: $S3_PATH"
