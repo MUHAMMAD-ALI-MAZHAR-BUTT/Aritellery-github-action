@@ -1,0 +1,14 @@
+{
+  "name": "my-node-project",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:load:signet": "SIGNET_API_KEY=$SIGNET_API_KEY SIGNET_API_URL=$SIGNET_API_URL artillery run --environment signet \"$(pwd)/test/load/config/offer-creation-mint-test.yml\"",
+    "test:load:mainnet": "MAINNET_API_KEY=$MAINNET_API_KEY MAINNET_API_URL=$MAINNET_API_URL artillery run --environment mainnet ./test/load/config/offer-creation-mint-test.yml"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}

@@ -1,0 +1,78 @@
+config:
+  target: "{{ target }}"
+  processor: "../error-processor.js"
+  phases:
+    # Cycle 1 (0-90s)
+    - { duration: 10, arrivalRate: 125, rampTo: 150, name: "Sine Rise 1" }
+    - { duration: 10, arrivalRate: 150, rampTo: 173, name: "Sine Rise 2" }
+    - { duration: 10, arrivalRate: 173, rampTo: 190, name: "Sine Rise 3" }
+    - { duration: 10, arrivalRate: 190, rampTo: 200, name: "Peak 1" }
+    - { duration: 10, arrivalRate: 200, rampTo: 190, name: "Sine Fall 1" }
+    - { duration: 10, arrivalRate: 190, rampTo: 173, name: "Sine Fall 2" }
+    - { duration: 10, arrivalRate: 173, rampTo: 150, name: "Sine Fall 3" }
+    - { duration: 10, arrivalRate: 150, rampTo: 125, name: "Sine Fall 4" }
+    - { duration: 10, arrivalRate: 125, rampTo: 99, name: "Sine Valley 1" }
+
+    # Cycle 2 (90-180s)
+    - { duration: 10, arrivalRate: 99, rampTo: 75, name: "Sine Valley 2" }
+    - { duration: 10, arrivalRate: 75, rampTo: 59, name: "Sine Valley 3" }
+    - { duration: 10, arrivalRate: 59, rampTo: 50, name: "Trough" }
+    - { duration: 10, arrivalRate: 50, rampTo: 59, name: "Sine Rise 4" }
+    - { duration: 10, arrivalRate: 59, rampTo: 75, name: "Sine Rise 5" }
+    - { duration: 10, arrivalRate: 75, rampTo: 99, name: "Sine Rise 6" }
+    - { duration: 10, arrivalRate: 99, rampTo: 125, name: "Sine Rise 7" }
+    - { duration: 10, arrivalRate: 125, rampTo: 150, name: "Sine Rise 8" }
+    - { duration: 10, arrivalRate: 150, rampTo: 173, name: "Sine Rise 9" }
+
+    # Cycle 3 (180-270s)
+    - { duration: 10, arrivalRate: 173, rampTo: 190, name: "Sine Rise 10" }
+    - { duration: 10, arrivalRate: 190, rampTo: 200, name: "Peak 2" }
+    - { duration: 10, arrivalRate: 200, rampTo: 190, name: "Sine Fall 5" }
+    - { duration: 10, arrivalRate: 190, rampTo: 173, name: "Sine Fall 6" }
+    - { duration: 10, arrivalRate: 173, rampTo: 150, name: "Sine Fall 7" }
+    - { duration: 10, arrivalRate: 150, rampTo: 125, name: "Sine Fall 8" }
+    - { duration: 10, arrivalRate: 125, rampTo: 99, name: "Sine Valley 4" }
+    - { duration: 10, arrivalRate: 99, rampTo: 75, name: "Sine Valley 5" }
+    - { duration: 10, arrivalRate: 75, rampTo: 61, name: "Sine Valley 6" }
+
+  http:
+    timeout: 30
+
+  environments:
+    signet:
+      target: "{{ $processEnvironment.SIGNET_API_URL }}"
+      defaults:
+        headers:
+          X-API-KEY: "{{ $processEnvironment.SIGNET_API_KEY }}"
+          Content-Type: "application/json"
+      payload:
+        path: "../data/signet-padding-check-addresses.csv"
+        fields:
+          - "address"
+          - "numberOfOutputs"
+        order: "random"
+
+    mainnet:
+      target: "{{ $processEnvironment.MAINNET_API_URL }}"
+      defaults:
+        headers:
+          X-API-KEY: "{{ $processEnvironment.MAINNET_API_KEY }}"
+          Content-Type: "application/json"
+      payload:
+        path: "../data/mainnet-padding-check-addresses.csv"
+        fields:
+          - "address"
+          - "numberOfOutputs"
+        order: "random"
+
+scenarios:
+  - name: "Check Padding Outputs"
+    flow:
+      - put:
+          url: "/marketplace/inscriptions/confirm-padding"
+          json:
+            address: "{{ address }}"
+            numberOfOutputs: "{{ numberOfOutputs }}"
+          expect:
+            - statusCode: 200
+          afterResponse: "captureErrorResponses"
