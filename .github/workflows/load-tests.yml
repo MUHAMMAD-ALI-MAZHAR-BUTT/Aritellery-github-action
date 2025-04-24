@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: "test/load-testing"
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -66,17 +67,18 @@ jobs:
             exit 1
           fi
 
-          # Set environment specific vars
+          # Set environment specific variables
           if [ "$ENVIRONMENT" = "signet" ]; then
-            export API_KEY="$SIGNET_API_KEY"
-            export API_URL="$SIGNET_API_URL"
+            export SIGNET_API_KEY="$SIGNET_API_KEY"
+            export SIGNET_API_URL="$SIGNET_API_URL"
           else
-            export API_KEY="$MAINNET_API_KEY"
-            export API_URL="$MAINNET_API_URL"
+            export MAINNET_API_KEY="$MAINNET_API_KEY"
+            export MAINNET_API_URL="$MAINNET_API_URL"
           fi
 
           echo "🚀 Starting ${{ inputs.test-case }} on $ENVIRONMENT"
           artillery run \
+            --record --key "$ARTILLERY_API_KEY" \
             --environment $ENVIRONMENT \
             "$TEST_FILE" \
             --output "$REPORT_NAME"
@@ -84,8 +86,7 @@ jobs:
           echo "📤 Uploading to S3: $S3_PATH"
           aws s3 cp "$REPORT_NAME" "$S3_PATH"
 
-          echo "📊 Publishing to Artillery Dashboard"
-          artillery report --key "$ARTILLERY_API_KEY" "$REPORT_NAME"
-
-          # Verify dashboard upload
-          echo "✅ Report ID: $(jq -r .reportId $REPORT_NAME)"
+          # Get report ID from results
+          REPORT_ID=$(jq -r '.metadata."artillery.io/record".id' "$REPORT_NAME")
+          echo "✅ Artillery Cloud Report: https://app.artillery.io/reports/$REPORT_ID"
+          echo "::set-output name=report_url::https://app.artillery.io/reports/$REPORT_ID"
