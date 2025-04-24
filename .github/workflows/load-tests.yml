@@ -22,7 +22,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # checkout your feature branch where the workflow lives
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
@@ -60,20 +59,19 @@ jobs:
           TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
           ENV="${{ inputs.environment }}"
           TEST="${{ inputs.test-case }}"
+          mkdir -p reports
+
           JSON="reports/${TEST}-${ENV}-${TS}.json"
           HTML="reports/${TEST}-${ENV}-${TS}.html"
           S3_JSON="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/json/${TEST}-${ENV}-${TS}.json"
           S3_HTML="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/html/${TEST}-${ENV}-${TS}.html"
           CONFIG="test/load/configs/${TEST}.yml"
 
-          mkdir -p reports
-
           if [[ ! -f "$CONFIG" ]]; then
             echo "❌ Config not found: $CONFIG"
             exit 1
           fi
 
-          # choose API endpoint
           if [[ "$ENV" == "signet" ]]; then
             export API_URL="$SIGNET_API_URL"
             export API_KEY="$SIGNET_API_KEY"
@@ -94,13 +92,18 @@ jobs:
             --output "$HTML" \
             "$JSON"
 
-          # capture report ID for the cloud link
+          # Expose variables for later steps
           REPORT_ID=$(jq -r '.metadata."artillery.io/record".id' "$JSON")
-          echo "::set-output name=report_id::$REPORT_ID"
-          echo "::set-output name=json_path::$JSON"
-          echo "::set-output name=html_path::$HTML"
-          echo "::set-output name=s3_json::$S3_JSON"
-          echo "::set-output name=s3_html::$S3_HTML"
+          echo "report_id=$REPORT_ID" >> $GITHUB_OUTPUT
+          echo "json_path=$JSON"        >> $GITHUB_OUTPUT
+          echo "html_path=$HTML"        >> $GITHUB_OUTPUT
+          echo "s3_json=$S3_JSON"       >> $GITHUB_OUTPUT
+          echo "s3_html=$S3_HTML"       >> $GITHUB_OUTPUT
+
+      - name: Verify reports directory
+        run: |
+          echo "📂 Contents of reports/:"
+          ls -lh reports/
 
       - name: Upload JSON & HTML as artifacts
         uses: actions/upload-artifact@v4
