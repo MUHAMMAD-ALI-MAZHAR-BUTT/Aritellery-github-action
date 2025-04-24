@@ -1,4 +1,5 @@
 name: Load Test Runner
+
 on:
   workflow_dispatch:
     inputs:
@@ -16,23 +17,25 @@ on:
 jobs:
   load-test:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: "test/load-testing"
+          # checkout your feature branch where the workflow lives
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Setup Node.js & Artillery
         uses: actions/setup-node@v4
         with:
           node-version: "18"
           cache: "npm"
-
-      - name: Install Dependencies
-        run: |
+      - run: |
           npm install -g artillery@latest
-          npm ci
+
+      - name: Install project dependencies
+        run: npm ci
 
       - name: Configure AWS CLI
         env:
@@ -40,11 +43,12 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TESTNET_S3_SECRET_KEY }}
           AWS_DEFAULT_REGION: ${{ secrets.TESTNET_S3_REGION }}
         run: |
-          aws configure set aws_access_key_id "$AWS_ACCESS_KEY_ID"
+          aws configure set aws_access_key_id    "$AWS_ACCESS_KEY_ID"
           aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
-          aws configure set region "$AWS_DEFAULT_REGION"
+          aws configure set region                "$AWS_DEFAULT_REGION"
 
-      - name: Run Load Test
+      - name: Run Artillery Pro load test
+        id: run_test
         env:
           ARTILLERY_API_KEY: ${{ secrets.QA_ARTILLERY_API_KEY }}
           SIGNET_API_KEY: ${{ secrets.QA_SIGNET_API_KEY }}
@@ -52,54 +56,64 @@ jobs:
           SIGNET_API_URL: ${{ secrets.QA_SIGNET_API_URL }}
           MAINNET_API_URL: ${{ secrets.QA_MAINNET_API_URL }}
         run: |
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
-          ENVIRONMENT="${{ inputs.environment }}"
-          REPORT_JSON="${{ inputs.test-case }}-${ENVIRONMENT}-${TIMESTAMP}.json"
-          REPORT_HTML="${{ inputs.test-case }}-${ENVIRONMENT}-${TIMESTAMP}.html"
-          S3_JSON_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENVIRONMENT}/json/${REPORT_JSON}"
-          S3_HTML_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENVIRONMENT}/html/${REPORT_HTML}"
-          TEST_FILE="test/load/configs/${{ inputs.test-case }}.yml"
+          set -e
+          TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
+          ENV="${{ inputs.environment }}"
+          TEST="${{ inputs.test-case }}"
+          JSON="reports/${TEST}-${ENV}-${TS}.json"
+          HTML="reports/${TEST}-${ENV}-${TS}.html"
+          S3_JSON="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/json/${TEST}-${ENV}-${TS}.json"
+          S3_HTML="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/html/${TEST}-${ENV}-${TS}.html"
+          CONFIG="test/load/configs/${TEST}.yml"
 
-          # Create reports directory
-          mkdir -p test/load/reports
+          mkdir -p reports
 
-          # Verify test file exists
-          if [ ! -f "$TEST_FILE" ]; then
-            echo "❌ Error: Missing test file at $TEST_FILE"
+          if [[ ! -f "$CONFIG" ]]; then
+            echo "❌ Config not found: $CONFIG"
             exit 1
           fi
 
-          # Set environment variables
-          if [ "$ENVIRONMENT" = "signet" ]; then
-            export API_KEY="$SIGNET_API_KEY"
+          # choose API endpoint
+          if [[ "$ENV" == "signet" ]]; then
             export API_URL="$SIGNET_API_URL"
+            export API_KEY="$SIGNET_API_KEY"
           else
-            export API_KEY="$MAINNET_API_KEY"
             export API_URL="$MAINNET_API_URL"
+            export API_KEY="$MAINNET_API_KEY"
           fi
 
-          # Run artillery test
-          echo "🚀 Starting ${{ inputs.test-case }} on $ENVIRONMENT"
+          echo "▶ Running Artillery test [$TEST] against $ENV..."
           artillery run \
-            --environment $ENVIRONMENT \
+            --environment "$ENV" \
             --record --key "$ARTILLERY_API_KEY" \
-            --output "test/load/reports/$REPORT_JSON" \
-            "$TEST_FILE"
+            --output "$JSON" \
+            "$CONFIG"
 
-          # Generate HTML report
-          echo "📊 Generating HTML report"
+          echo "▶ Generating local HTML report..."
           artillery report \
-            --output "test/load/reports/$REPORT_HTML" \
-            "test/load/reports/$REPORT_JSON"
+            --output "$HTML" \
+            "$JSON"
 
-          # Upload reports to S3
-          echo "📤 Uploading JSON report to S3"
-          aws s3 cp "test/load/reports/$REPORT_JSON" "$S3_JSON_PATH"
+          # capture report ID for the cloud link
+          REPORT_ID=$(jq -r '.metadata."artillery.io/record".id' "$JSON")
+          echo "::set-output name=report_id::$REPORT_ID"
+          echo "::set-output name=json_path::$JSON"
+          echo "::set-output name=html_path::$HTML"
+          echo "::set-output name=s3_json::$S3_JSON"
+          echo "::set-output name=s3_html::$S3_HTML"
 
-          echo "📤 Uploading HTML report to S3"
-          aws s3 cp "test/load/reports/$REPORT_HTML" "$S3_HTML_PATH"
+      - name: Upload JSON & HTML as artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: load-test-reports
+          path: reports/*
 
-          # Get Artillery report ID
-          REPORT_ID=$(jq -r '.metadata."artillery.io/record".id' "test/load/reports/$REPORT_JSON")
-          echo "✅ Artillery Cloud Report: https://app.artillery.io/reports/$REPORT_ID"
-          echo "::set-output name=report_url::https://app.artillery.io/reports/$REPORT_ID"
+      - name: Upload reports to S3
+        run: |
+          aws s3 cp "${{ steps.run_test.outputs.json_path }}" "${{ steps.run_test.outputs.s3_json }}"
+          aws s3 cp "${{ steps.run_test.outputs.html_path }}" "${{ steps.run_test.outputs.s3_html }}"
+
+      - name: Announce report URLs
+        run: |
+          echo "✅ Artillery Pro Dashboard: https://app.artillery.io/reports/${{ steps.run_test.outputs.report_id }}"
+          echo "📄 S3 HTML Report: https://${{ secrets.TESTNET_S3_BUCKET_NAME }}.s3.${{ secrets.TESTNET_S3_REGION }}.amazonaws.com/${{ inputs.environment }}/html/$(basename "${{ steps.run_test.outputs.html_path }}")"
