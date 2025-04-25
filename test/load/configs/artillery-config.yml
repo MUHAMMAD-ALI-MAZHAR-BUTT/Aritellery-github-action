@@ -1,0 +1,9 @@
+config:
+  http:
+    capture:
+      requestBody: true
+      responseBody: true
+  reports:
+    json:
+      include:
+        - intermediate
