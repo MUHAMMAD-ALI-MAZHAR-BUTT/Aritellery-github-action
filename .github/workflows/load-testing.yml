@@ -119,9 +119,9 @@ jobs:
           echo "⚡ Generating error reports..."
           # CSV with counts (handle empty cases)
           jq -r '
-            (["status_code", "count"], 
-            (.aggregate.codes // {} | to_entries | map([.key, .value]))[] 
-            | @csv' "$JSON_REPORT" > "$ERROR_REPORT"
+            (["status_code", "count"] | @csv),
+            (.aggregate.codes // {} | to_entries[] | [.key, .value] | @csv)
+          ' "$JSON_REPORT" > "$ERROR_REPORT"
 
           # Detailed error log with exact format
           echo "Generating detailed error log..."
