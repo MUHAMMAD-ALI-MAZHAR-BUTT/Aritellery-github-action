@@ -95,11 +95,7 @@ jobs:
           # File paths
           JSON_REPORT="reports/${TEST}-${ENV}-${TS}.json"
           ERROR_REPORT="reports/${TEST}-${ENV}-${TS}-errors.csv"
-          DETAILED_ERROR_LOG="reports/${TEST}-${ENV}-${TS}-detailed-errors.log"
-          PROCESSOR_LOG_DIR="test/load/logs/${TEST}-${ENV}-${TS}"
-          S3_JSON="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/json/${TEST}-${ENV}-${TS}.json"
-          S3_DETAILED="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/logs/${TEST}-${ENV}-${TS}-detailed-errors.log"
-          S3_PROCESSOR_LOGS="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/processor-logs/${TEST}-${ENV}-${TS}/"
+          ERROR_LOG="reports/${TEST}-${ENV}-${TS}-errors.log"
           CONFIG="test/load/configs/${TEST}.yml"
 
           # Set environment variables
@@ -111,7 +107,10 @@ jobs:
             export API_KEY="$MAINNET_API_KEY"
           fi
 
-          # Run Artillery with error tolerance
+          # Clean previous logs
+          rm -rf test/load/logs/*
+
+          # Run Artillery test
           echo "▶ Starting load test: ${TEST} on ${ENV}"
           artillery run \
             --environment "$ENV" \
@@ -120,64 +119,37 @@ jobs:
             --config "test/load/configs/artillery-config.yml" \
             "$CONFIG" || true
 
-          # Generate error reports with fallbacks
+          # Generate error reports
           echo "⚡ Generating error reports..."
 
-          # CSV report
+          # 1. Create CSV from JSON
           {
             echo "status_code,error_type,count"
-            if [ -s "$JSON_REPORT" ]; then
-              jq -r '(.aggregate.codes // {}) | to_entries[] | [
-                .key, 
-                (if .key >= 500 then "server-error" elif .key >= 400 then "client-error" else "other" end), 
-                .value
-              ] | @csv' "$JSON_REPORT" 2>/dev/null || true
-            fi
+            jq -r '(.aggregate.codes // {}) | to_entries[] | [
+              .key, 
+              (if .key >= 500 then "server-error" elif .key >= 400 then "client-error" else "other" end), 
+              .value
+            ] | @csv' "$JSON_REPORT" 2>/dev/null || true
           } > "$ERROR_REPORT"
 
-          # Detailed error log
-          {
-            if [ -s "$JSON_REPORT" ]; then
-              jq --arg env "$ENV" -r '
-                ((.intermediate // [])[] | 
-                select(.response.status >= 400)) // "No error details available" |
-                "==========================\n" +
-                "[\(.timestamp)]\n" +
-                "Environment: \($env)\n" +
-                "Status: \(.response.status)\n" +
-                "URL: \(.request.url // "unknown")\n" +
-                "Request Body:\n\(.request.json? // {} | tojson)\n" +
-                "Response Body:\n\(.response.body | if type != "string" then tojson else . end)\n"
-              ' "$JSON_REPORT" 2>/dev/null || true
-            else
-              echo "No test data collected - possible complete failure"
-            fi
-          } > "$DETAILED_ERROR_LOG"
+          # 2. Consolidate error processor logs
+          find test/load/logs -name '*.log' -exec cat {} + > "$ERROR_LOG" || true
 
-          # Processor logs collection
-          mkdir -p "$PROCESSOR_LOG_DIR"
-          find test/load/logs -name '*.log' -exec cp --parents {} "$PROCESSOR_LOG_DIR" \; || true
-
-          # Create placeholder if no processor logs
-          if [ -z "$(find "$PROCESSOR_LOG_DIR" -name '*.log')" ]; then
-            mkdir -p "$PROCESSOR_LOG_DIR/empty-logs"
-            echo "No error processor logs generated" > "$PROCESSOR_LOG_DIR/empty-logs/no-errors.log"
+          # Add fallback content if empty
+          if [ ! -s "$ERROR_LOG" ]; then
+            echo "No errors detected by error processor" > "$ERROR_LOG"
           fi
 
-          # Finalize error log formatting
-          if [ -s "$DETAILED_ERROR_LOG" ]; then
-            echo -e "\n==========================" >> "$DETAILED_ERROR_LOG"
+          # 3. Ensure JSON exists
+          if [ ! -f "$JSON_REPORT" ]; then
+            echo '{"message":"Empty report due to test failure"}' > "$JSON_REPORT"
           fi
 
           # Save outputs
           echo "report_id=$(jq -r '.metadata."artillery.io/record".id' "$JSON_REPORT" 2>/dev/null || echo 'null')" >> $GITHUB_OUTPUT
           echo "json_path=$JSON_REPORT" >> $GITHUB_OUTPUT
-          echo "error_path=$ERROR_REPORT" >> $GITHUB_OUTPUT
-          echo "detailed_error_path=$DETAILED_ERROR_LOG" >> $GITHUB_OUTPUT
-          echo "processor_logs_dir=$PROCESSOR_LOG_DIR" >> $GITHUB_OUTPUT
-          echo "s3_json=$S3_JSON" >> $GITHUB_OUTPUT
-          echo "s3_detailed=$S3_DETAILED" >> $GITHUB_OUTPUT
-          echo "s3_processor_logs=$S3_PROCESSOR_LOGS" >> $GITHUB_OUTPUT
+          echo "error_csv_path=$ERROR_REPORT" >> $GITHUB_OUTPUT
+          echo "error_log_path=$ERROR_LOG" >> $GITHUB_OUTPUT
           echo "timestamp=$TS" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
@@ -186,16 +158,15 @@ jobs:
           name: load-test-${{ matrix.test-case }}-${{ inputs.environment }}-${{ steps.run_test.outputs.timestamp }}
           path: |
             ${{ steps.run_test.outputs.json_path }}
-            ${{ steps.run_test.outputs.error_path }}
-            ${{ steps.run_test.outputs.detailed_error_path }}
-            ${{ steps.run_test.outputs.processor_logs_dir }}/**/*
+            ${{ steps.run_test.outputs.error_csv_path }}
+            ${{ steps.run_test.outputs.error_log_path }}
           retention-days: 7
 
       - name: Upload to S3
         run: |
-          aws s3 cp "${{ steps.run_test.outputs.json_path }}" "${{ steps.run_test.outputs.s3_json }}" || echo "JSON upload failed"
-          aws s3 cp "${{ steps.run_test.outputs.detailed_error_path }}" "${{ steps.run_test.outputs.s3_detailed }}" || echo "Detailed log upload failed"
-          aws s3 sync "${{ steps.run_test.outputs.processor_logs_dir }}" "${{ steps.run_test.outputs.s3_processor_logs }}" --delete || echo "Processor logs sync failed"
+          aws s3 cp "${{ steps.run_test.outputs.json_path }}" "s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${{ inputs.environment }}/json/"
+          aws s3 cp "${{ steps.run_test.outputs.error_csv_path }}" "s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${{ inputs.environment }}/csv/"
+          aws s3 cp "${{ steps.run_test.outputs.error_log_path }}" "s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${{ inputs.environment }}/logs/"
 
       - name: Cleanup
         run: |
@@ -206,6 +177,5 @@ jobs:
         run: |
           echo "✅ Artillery Dashboard: https://app.artillery.io/reports/${{ steps.run_test.outputs.report_id }}"
           echo "📄 JSON Report: ${{ steps.run_test.outputs.json_path }}"
-          echo "❌ Error Report: ${{ steps.run_test.outputs.error_path }}"
-          echo "📝 Detailed Error Log: ${{ steps.run_test.outputs.detailed_error_path }}"
-          echo "🔧 Processor Logs: ${{ steps.run_test.outputs.s3_processor_logs }}"
+          echo "📊 Error CSV: ${{ steps.run_test.outputs.error_csv_path }}"
+          echo "📝 Error Log: ${{ steps.run_test.outputs.error_log_path }}"
