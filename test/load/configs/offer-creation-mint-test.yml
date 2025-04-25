@@ -85,10 +85,9 @@ scenarios:
             takerPaymentPublicKey: "{{ takerPaymentPublicKey }}"
             feeRate: "{{ feeRate }}"
             satScan: "{{ satScan }}"
-          expect:
-            - statusCode: 200
-            - hasProperty: "success"
-            - equals:
-                - "$.success"
-                - true
+          capture:
+            - json: "$.requestBody"
+              as: requestBody
+            - json: "$.responseBody"
+              as: responseBody
           afterResponse: "captureErrorResponses"

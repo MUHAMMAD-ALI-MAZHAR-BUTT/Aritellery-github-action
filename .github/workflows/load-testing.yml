@@ -117,19 +117,32 @@ jobs:
 
           # Generate error reports
           echo "⚡ Generating error reports..."
-          # CSV with counts
+          # CSV with counts (handle empty cases)
           jq -r '
-            ["status_code", "count"],
-            (.aggregate.codes | to_entries[] | [.key, .value]) 
+            (["status_code", "count"], 
+            (.aggregate.codes // {} | to_entries | map([.key, .value]))[] 
             | @csv' "$JSON_REPORT" > "$ERROR_REPORT"
 
-          # Detailed error log
+          # Detailed error log with exact format
           echo "Generating detailed error log..."
           jq --arg env "$ENV" -r '
-            .intermediate[] | 
-            select(.statusCode >= 400) | 
-            "[\(.timestamp)]\nEnvironment: \($env)\nStatus: \(.statusCode)\nURL: \(.url)\nRequest Body:\n\(.requestBody)\nResponse Body:\n\(.responseBody)\n==========================\n"
+            (.intermediate // [])[] | 
+            select((.statusCode? // 0) >= 400) |
+            "==========================\n" +
+            "[\(.timestamp)]\n" +
+            "Environment: \($env)\n" +
+            "Status: \(.statusCode // "unknown")\n" +
+            "URL: \(.url? // "unknown")\n" +
+            "Request Body:\n\(.requestBody? // "{}" | if type == "string" then . else tojson end)\n" +
+            "Response Body:\n\(.responseBody? // "{}" | if type == "string" then . else tojson end)\n"
           ' "$JSON_REPORT" > "$DETAILED_ERROR_LOG"
+
+          # Add final separator and handle empty cases
+          if [ -s "$DETAILED_ERROR_LOG" ]; then
+            echo -e "\n==========================" >> "$DETAILED_ERROR_LOG"
+          else
+            echo "No errors detected during test" > "$DETAILED_ERROR_LOG"
+          fi
 
           # Save outputs
           echo "report_id=$(jq -r '.metadata."artillery.io/record".id' "$JSON_REPORT")" >> $GITHUB_OUTPUT

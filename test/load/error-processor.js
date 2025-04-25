@@ -1,76 +1,76 @@
 const fs = require("fs");
 const path = require("path");
 
-const logsDir = path.join(__dirname, "logs");
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
-}
-
-const createdLogFiles = {};
-
-function captureErrorResponses(requestParams, response, context, ee, next) {
-  const isError =
-    response.statusCode !== 200 ||
-    (response.body && response.body.success === false);
-
-  if (!isError) return next();
-
-  let environment = "unknown";
-
-  if (context.vars.$environment) {
-    environment = context.vars.$environment;
-  } else if (context.vars.target) {
-    const target = context.vars.target.toLowerCase();
-    if (target.includes("signet")) environment = "signet";
-    else if (target.includes("mainnet")) environment = "mainnet";
-  }
-
-  const envLogsDir = path.join(logsDir, environment);
-  if (!fs.existsSync(envLogsDir)) {
-    fs.mkdirSync(envLogsDir, { recursive: true });
-  }
-
-  const endpoint = requestParams.url.split("/").pop();
-  const logFilePath = path.join(envLogsDir, `${endpoint}-errors.log`);
-
-  if (!createdLogFiles[logFilePath]) {
-    fs.writeFileSync(logFilePath, "");
-    createdLogFiles[logFilePath] = true;
-  }
-
-  const timestamp = new Date().toISOString();
-
-  let logEntry = `==========================\n`;
-  logEntry += `[${timestamp}]\n`;
-  logEntry += `Environment: ${environment}\n`;
-  logEntry += `Status: ${response.statusCode}\n`;
-  logEntry += `URL: ${context.vars.target}${requestParams.url}\n`;
-
-  const resolvedBody = {
-    address: context.vars.address || "unknown",
-    numberOfOutputs: context.vars.numberOfOutputs || "unknown",
-  };
-  logEntry += `Request Body:\n${JSON.stringify(resolvedBody, null, 2)}\n`;
-
-  let responseBodyText = "";
-  try {
-    if (typeof response.body === "string") {
-      responseBodyText = JSON.stringify(JSON.parse(response.body), null, 2);
-    } else {
-      responseBodyText = JSON.stringify(response.body, null, 2);
-    }
-  } catch (err) {
-    responseBodyText = response.body;
-  }
-
-  logEntry += `Response Body:\n${responseBodyText}\n`;
-
-  fs.appendFileSync(logFilePath, logEntry + "\n");
-
-  return next();
-}
-
 module.exports = {
-  captureErrorResponses,
-  setupTest: function () {},
+  captureErrorResponses: (response, context, ee, next) => {
+    try {
+      // Capture essential elements for logging
+      const errorData = {
+        timestamp: new Date().toISOString(),
+        environment: context.vars.$environment || "unknown",
+        statusCode: response.statusCode || 0,
+        url: `${context.vars.target}${
+          response.request?.path || "/unknown-path"
+        }`,
+        requestBody: context.vars.$loopElement
+          ? JSON.stringify(context.vars.$loopElement, null, 2)
+          : "{}",
+        responseBody: response.body
+          ? JSON.stringify(response.body, null, 2)
+          : "{}",
+      };
+
+      // Create formatted log entry
+      const logEntry = [
+        "==========================",
+        `[${errorData.timestamp}]`,
+        `Environment: ${errorData.environment}`,
+        `Status: ${errorData.statusCode}`,
+        `URL: ${errorData.url}`,
+        "Request Body:",
+        errorData.requestBody,
+        "Response Body:",
+        errorData.responseBody,
+        "",
+      ].join("\n");
+
+      // Initialize errors array if not exists
+      if (!context.vars.errors) {
+        context.vars.errors = [];
+      }
+
+      // Store error entry for later processing
+      context.vars.errors.push(logEntry);
+    } catch (error) {
+      console.error("Error processing response:", error);
+    }
+    next();
+  },
+
+  hooks: {
+    afterScenario: (context, events, done) => {
+      try {
+        if (context.vars.errors?.length > 0) {
+          const reportsDir = path.join(__dirname, "reports");
+          if (!fs.existsSync(reportsDir)) {
+            fs.mkdirSync(reportsDir, { recursive: true });
+          }
+
+          const logFileName = `errors-${
+            context.vars.$environment
+          }-${Date.now()}.log`;
+          const logPath = path.join(reportsDir, logFileName);
+
+          // Write all accumulated errors
+          fs.writeFileSync(logPath, context.vars.errors.join("\n"));
+
+          // Add to artillery report context
+          context.vars.detailedErrorLog = logPath;
+        }
+      } catch (error) {
+        console.error("Error writing error log:", error);
+      }
+      done();
+    },
+  },
 };
