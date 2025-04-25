@@ -76,6 +76,9 @@ jobs:
           aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
           aws configure set region "$AWS_DEFAULT_REGION"
 
+      - name: Create reports directory
+        run: mkdir -p reports
+
       - name: Run Artillery test
         id: run_test
         env:
@@ -88,7 +91,7 @@ jobs:
           TS=$(date -u +"%Y-%m-%dT%H-%M-%SZ")
           ENV="${{ inputs.environment }}"
           TEST="${{ matrix.test-case }}"
-          
+
           # File paths
           JSON_REPORT="reports/${TEST}-${ENV}-${TS}.json"
           ERROR_REPORT="reports/${TEST}-${ENV}-${TS}-errors.csv"
@@ -105,13 +108,15 @@ jobs:
           fi
 
           # Run Artillery
+          echo "▶ Starting load test: ${TEST} on ${ENV}"
           artillery run \
             --environment "$ENV" \
             --record --key "$ARTILLERY_API_KEY" \
             --output "$JSON_REPORT" \
             "$CONFIG"
 
-          # Generate error report (HTTP status codes)
+          # Generate error report
+          echo "⚡ Generating error report..."
           jq -r '
             ["status_code", "count"],
             (.aggregate.codes | to_entries[] | [.key, .value]) 
@@ -135,3 +140,12 @@ jobs:
       - name: Upload to S3
         run: |
           aws s3 cp "${{ steps.run_test.outputs.json_path }}" "${{ steps.run_test.outputs.s3_json }}"
+
+      - name: Cleanup reports
+        run: rm -rf reports/
+
+      - name: Show report URLs
+        run: |
+          echo "✅ Artillery Dashboard: https://app.artillery.io/reports/${{ steps.run_test.outputs.report_id }}"
+          echo "📄 JSON Report: ${{ steps.run_test.outputs.json_path }}"
+          echo "❌ Error Report: ${{ steps.run_test.outputs.error_path }}"
