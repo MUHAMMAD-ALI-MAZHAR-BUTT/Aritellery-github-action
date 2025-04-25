@@ -2,20 +2,27 @@ const fs = require("fs");
 const path = require("path");
 
 module.exports = {
-  captureErrorResponses: (response, context, ee, next) => {
+  captureErrorResponses: (requestParams, response, context, ee, next) => {
     try {
+      // Get environment from Artillery context or target URL
+      const environment =
+        process.env.ENV ||
+        (context.vars.target?.includes("signet")
+          ? "signet"
+          : context.vars.target?.includes("mainnet")
+          ? "mainnet"
+          : "unknown");
+
       // Capture essential elements for logging
       const errorData = {
         timestamp: new Date().toISOString(),
-        environment: context.vars.$environment || "unknown",
-        statusCode: response.statusCode || 0,
-        url: `${context.vars.target}${
-          response.request?.path || "/unknown-path"
-        }`,
+        environment: environment,
+        statusCode: response?.statusCode || 0,
+        url: `${context.vars.target}${requestParams?.url || "/unknown-path"}`,
         requestBody: context.vars.$loopElement
           ? JSON.stringify(context.vars.$loopElement, null, 2)
           : "{}",
-        responseBody: response.body
+        responseBody: response?.body
           ? JSON.stringify(response.body, null, 2)
           : "{}",
       };
@@ -43,8 +50,9 @@ module.exports = {
       context.vars.errors.push(logEntry);
     } catch (error) {
       console.error("Error processing response:", error);
+    } finally {
+      next(); // Ensure next() is always called
     }
-    next();
   },
 
   hooks: {
@@ -56,9 +64,7 @@ module.exports = {
             fs.mkdirSync(reportsDir, { recursive: true });
           }
 
-          const logFileName = `errors-${
-            context.vars.$environment
-          }-${Date.now()}.log`;
+          const logFileName = `errors-${process.env.ENV}-${Date.now()}.log`;
           const logPath = path.join(reportsDir, logFileName);
 
           // Write all accumulated errors
@@ -69,8 +75,9 @@ module.exports = {
         }
       } catch (error) {
         console.error("Error writing error log:", error);
+      } finally {
+        done(); // Ensure done() is always called
       }
-      done();
     },
   },
 };
