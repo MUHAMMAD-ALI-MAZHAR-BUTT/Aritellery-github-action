@@ -1,4 +1,4 @@
-name: Load Test Runner
+name: Enhanced Load Test Runner
 
 on:
   workflow_dispatch:
@@ -14,7 +14,7 @@ on:
         type: choice
         options: [single, all]
       test-case:
-        description: "Test config filename (without .yml) - required if 'single' mode"
+        description: "Test config filename (without .yml)"
         required: false
         type: string
         default: ""
@@ -25,20 +25,13 @@ jobs:
     outputs:
       test-cases: ${{ steps.get-tests.outputs.test-cases }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-          fetch-depth: 0
-
-      - name: Discover test cases
+      - uses: actions/checkout@v4
+      - name: Discover tests
         id: get-tests
         run: |
           if [[ "${{ inputs.run-mode }}" == "all" ]]; then
-            # Find all YAML files in configs directory
             tests=$(find test/load/configs -name "*.yml" -exec basename {} .yml \; | jq -R -s -c 'split("\n") | map(select(. != ""))')
           else
-            # Use the specified test case
             tests="[\"${{ inputs.test-case }}\"]"
           fi
           echo "test-cases=$tests" >> $GITHUB_OUTPUT
@@ -50,23 +43,18 @@ jobs:
       matrix:
         test-case: ${{ fromJSON(needs.setup.outputs.test-cases) }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref_name }}
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Setup Node.js & Artillery
+      - name: Setup environment
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: 18
           cache: "npm"
-      - run: npm install -g artillery@latest
+        run: |
+          npm install -g artillery@latest
+          npm ci
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Configure AWS CLI
+      - name: Configure AWS
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.TESTNET_S3_ACCESS_KEY }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TESTNET_S3_SECRET_KEY }}
@@ -76,11 +64,13 @@ jobs:
           aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
           aws configure set region "$AWS_DEFAULT_REGION"
 
-      - name: Create reports directory
-        run: mkdir -p reports
+      - name: Create directories
+        run: |
+          mkdir -p reports/{json,errors,logs}
+          mkdir -p artifacts
 
-      - name: Run Artillery test
-        id: run_test
+      - name: Run load test
+        id: test-run
         env:
           ARTILLERY_API_KEY: ${{ secrets.QA_ARTILLERY_API_KEY }}
           SIGNET_API_KEY: ${{ secrets.QA_SIGNET_API_KEY }}
@@ -93,59 +83,60 @@ jobs:
           TEST="${{ matrix.test-case }}"
 
           # File paths
-          JSON_REPORT="reports/${TEST}-${ENV}-${TS}.json"
-          ERROR_REPORT="reports/${TEST}-${ENV}-${TS}-errors.csv"
-          S3_JSON="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/json/${TEST}-${ENV}-${TS}.json"
-          CONFIG="test/load/configs/${TEST}.yml"
+          JSON_REPORT="reports/json/${TEST}-${ENV}-${TS}.json"
+          ERROR_LOG="reports/errors/${TEST}-${ENV}-${TS}-detailed-errors.log"
+          METRICS_CSV="reports/logs/${TEST}-${ENV}-${TS}-metrics.csv"
+          S3_BASE_PATH="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/${TS}"
 
-          # Set environment variables
-          if [[ "$ENV" == "signet" ]]; then
-            export API_URL="$SIGNET_API_URL"
-            export API_KEY="$SIGNET_API_KEY"
-          else
-            export API_URL="$MAINNET_API_URL"
-            export API_KEY="$MAINNET_API_KEY"
-          fi
+          # Set API config
+          [[ "$ENV" == "signet" ]] && export API_URL="$SIGNET_API_URL" API_KEY="$SIGNET_API_KEY" || 
+            export API_URL="$MAINNET_API_URL" API_KEY="$MAINNET_API_KEY"
 
-          # Run Artillery
-          echo "▶ Starting load test: ${TEST} on ${ENV}"
+          # Run Artillery with detailed logging
           artillery run \
             --environment "$ENV" \
             --record --key "$ARTILLERY_API_KEY" \
             --output "$JSON_REPORT" \
-            "$CONFIG"
+            "test/load/configs/${TEST}.yml" 2>&1 | tee "${ERROR_LOG}"
 
-          # Generate error report
-          echo "⚡ Generating error report..."
+          # Generate metrics report
           jq -r '
             ["status_code", "count"],
             (.aggregate.codes | to_entries[] | [.key, .value]) 
-            | @csv' "$JSON_REPORT" > "$ERROR_REPORT"
+            | @csv' "$JSON_REPORT" > "$METRICS_CSV"
 
-          # Save outputs
-          echo "report_id=$(jq -r '.metadata."artillery.io/record".id' "$JSON_REPORT")" >> $GITHUB_OUTPUT
-          echo "json_path=$JSON_REPORT" >> $GITHUB_OUTPUT
-          echo "error_path=$ERROR_REPORT" >> $GITHUB_OUTPUT
-          echo "s3_json=$S3_JSON" >> $GITHUB_OUTPUT
-          echo "timestamp=$TS" >> $GITHUB_OUTPUT
+          # Extract failed requests
+          jq -r '
+            .intermediate[]? | 
+            select(.latency > 5000 or (.statusCode != 200)) |
+            "\(.timestamp) | \(.method) \(.url) | Status: \(.statusCode) | Latency: \(.latency)ms"
+          ' "$JSON_REPORT" >> "${ERROR_LOG}"
+
+          # Package artifacts
+          tar -czvf "artifacts/${TEST}-${ENV}-${TS}.tar.gz" \
+            "$JSON_REPORT" \
+            "$ERROR_LOG" \
+            "$METRICS_CSV"
+
+          # Set outputs
+          echo "artifact_path=artifacts/${TEST}-${ENV}-${TS}.tar.gz" >> $GITHUB_OUTPUT
+          echo "s3_json_path=${S3_BASE_PATH}/json/${TEST}.json" >> $GITHUB_OUTPUT
+          echo "s3_logs_path=${S3_BASE_PATH}/logs/" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: load-test-${{ matrix.test-case }}-${{ inputs.environment }}-${{ steps.run_test.outputs.timestamp }}
+          name: load-test-${{ matrix.test-case }}-${{ inputs.environment }}
           path: |
-            ${{ steps.run_test.outputs.json_path }}
-            ${{ steps.run_test.outputs.error_path }}
+            ${{ steps.test-run.outputs.artifact_path }}
+            reports/**
 
       - name: Upload to S3
         run: |
-          aws s3 cp "${{ steps.run_test.outputs.json_path }}" "${{ steps.run_test.outputs.s3_json }}"
+          aws s3 cp "${{ steps.test-run.outputs.artifact_path }}" "${{ steps.test-run.outputs.s3_logs_path }}"
+          aws s3 cp "reports/json/" "${{ steps.test-run.outputs.s3_json_path }}" --recursive
+          aws s3 cp "reports/errors/" "${{ steps.test-run.outputs.s3_logs_path }}" --recursive
+          aws s3 cp "reports/logs/" "${{ steps.test-run.outputs.s3_logs_path }}" --recursive
 
-      - name: Cleanup reports
-        run: rm -rf reports/
-
-      - name: Show report URLs
-        run: |
-          echo "✅ Artillery Dashboard: https://app.artillery.io/reports/${{ steps.run_test.outputs.report_id }}"
-          echo "📄 JSON Report: ${{ steps.run_test.outputs.json_path }}"
-          echo "❌ Error Report: ${{ steps.run_test.outputs.error_path }}"
+      - name: Cleanup
+        run: rm -rf reports/ artifacts/
