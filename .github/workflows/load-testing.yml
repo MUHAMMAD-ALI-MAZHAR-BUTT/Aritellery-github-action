@@ -92,7 +92,7 @@ jobs:
           ENV="${{ inputs.environment }}"
           TEST="${{ matrix.test-case }}"
 
-          # File paths
+          # File paths (relative to repo root)
           JSON_REPORT="reports/${TEST}-${ENV}-${TS}.json"
           ERROR_REPORT="reports/${TEST}-${ENV}-${TS}-errors.csv"
           DETAILED_ERROR_LOG="reports/${TEST}-${ENV}-${TS}-detailed-errors.log"
@@ -111,19 +111,21 @@ jobs:
             export API_KEY="$MAINNET_API_KEY"
           fi
 
-          # Run Artillery with response storage
+          # Run Artillery with full logging
           echo "▶ Starting load test: ${TEST} on ${ENV}"
           artillery run \
             --environment "$ENV" \
             --record --key "$ARTILLERY_API_KEY" \
             --output "$JSON_REPORT" \
+            --include-response-body \
+            --include-request-body \
             --config "test/load/configs/artillery-config.yml" \
             "$CONFIG"
 
           # Generate error reports
           echo "⚡ Generating error reports..."
 
-          # Enhanced CSV report
+          # CSV error report
           jq -r '
             ["status_code", "error_type", "count"],
             (.aggregate.codes | to_entries[] | 
@@ -134,7 +136,7 @@ jobs:
               .value] | @csv)
           ' "$JSON_REPORT" > "$ERROR_REPORT"
 
-          # Improved detailed error log
+          # Detailed error log from Artillery JSON
           jq --arg env "$ENV" -r '
             (.intermediate // [])[] | 
             select(.response.status >= 400) |
@@ -144,13 +146,12 @@ jobs:
             "Status: \(.response.status)\n" +
             "URL: \(.request.url // "unknown")\n" +
             "Request Body:\n\(.request.json? // {} | tojson)\n" +
-            "Response Body:\n\(.response.body? // {} | 
-              if type == "string" then . else tojson end)\n"
+            "Response Body:\n\(.response.body | if type != "string" then tojson else . end)\n"
           ' "$JSON_REPORT" > "$DETAILED_ERROR_LOG"
 
-          # Add processor logs
+          # Copy processor logs (including subdirectories)
           mkdir -p "$PROCESSOR_LOG_DIR"
-          cp test/load/logs/*.log "$PROCESSOR_LOG_DIR" 2>/dev/null || true
+          find test/load/logs -name '*.log' -exec cp --parents {} "$PROCESSOR_LOG_DIR" \;
 
           # Finalize error log
           if [ -s "$DETAILED_ERROR_LOG" ]; then
@@ -178,7 +179,7 @@ jobs:
             ${{ steps.run_test.outputs.json_path }}
             ${{ steps.run_test.outputs.error_path }}
             ${{ steps.run_test.outputs.detailed_error_path }}
-            ${{ steps.run_test.outputs.processor_logs_dir }}
+            ${{ steps.run_test.outputs.processor_logs_dir }}/*
 
       - name: Upload to S3
         run: |
