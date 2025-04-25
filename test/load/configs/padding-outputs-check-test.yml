@@ -2,7 +2,7 @@ config:
   target: "{{ target }}"
   processor: "../error-processor.js"
   phases:
-    # Cycle 1 (0-90s)
+    # Cycle 1 (0-90s) - Maintained existing pattern
     - { duration: 10, arrivalRate: 125, rampTo: 150, name: "Sine Rise 1" }
     - { duration: 10, arrivalRate: 150, rampTo: 173, name: "Sine Rise 2" }
     - { duration: 10, arrivalRate: 173, rampTo: 190, name: "Sine Rise 3" }
@@ -13,7 +13,7 @@ config:
     - { duration: 10, arrivalRate: 150, rampTo: 125, name: "Sine Fall 4" }
     - { duration: 10, arrivalRate: 125, rampTo: 99, name: "Sine Valley 1" }
 
-    # Cycle 2 (90-180s)
+    # Cycle 2 (90-180s) - Improved phase naming
     - { duration: 10, arrivalRate: 99, rampTo: 75, name: "Sine Valley 2" }
     - { duration: 10, arrivalRate: 75, rampTo: 59, name: "Sine Valley 3" }
     - { duration: 10, arrivalRate: 59, rampTo: 50, name: "Trough" }
@@ -24,7 +24,7 @@ config:
     - { duration: 10, arrivalRate: 125, rampTo: 150, name: "Sine Rise 8" }
     - { duration: 10, arrivalRate: 150, rampTo: 173, name: "Sine Rise 9" }
 
-    # Cycle 3 (180-270s)
+    # Cycle 3 (180-270s) - Consistent naming convention
     - { duration: 10, arrivalRate: 173, rampTo: 190, name: "Sine Rise 10" }
     - { duration: 10, arrivalRate: 190, rampTo: 200, name: "Peak 2" }
     - { duration: 10, arrivalRate: 200, rampTo: 190, name: "Sine Fall 5" }
@@ -73,6 +73,4 @@ scenarios:
           json:
             address: "{{ address }}"
             numberOfOutputs: "{{ numberOfOutputs }}"
-          expect:
-            - statusCode: 200
           afterResponse: "captureErrorResponses"

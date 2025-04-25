@@ -123,18 +123,18 @@ jobs:
             (.aggregate.codes // {} | to_entries[] | [.key, .value] | @csv)
           ' "$JSON_REPORT" > "$ERROR_REPORT"
 
-          # Detailed error log with exact format
+          # Corrected detailed error log with proper field paths
           echo "Generating detailed error log..."
           jq --arg env "$ENV" -r '
             (.intermediate // [])[] | 
-            select((.statusCode? // 0) >= 400) |
+            select((.response.statusCode? // 0) >= 400) |
             "==========================\n" +
             "[\(.timestamp)]\n" +
             "Environment: \($env)\n" +
-            "Status: \(.statusCode // "unknown")\n" +
-            "URL: \(.url? // "unknown")\n" +
-            "Request Body:\n\(.requestBody? // "{}" | if type == "string" then . else tojson end)\n" +
-            "Response Body:\n\(.responseBody? // "{}" | if type == "string" then . else tojson end)\n"
+            "Status: \(.response.statusCode // "unknown")\n" +
+            "URL: \(.request.url? // "unknown")\n" +
+            "Request Body:\n\(.request.body? // "{}" | if type == "string" then . else tojson end)\n" +
+            "Response Body:\n\(.response.body? // "{}" | if type == "string" then . else tojson end)\n"
           ' "$JSON_REPORT" > "$DETAILED_ERROR_LOG"
 
           # Add final separator and handle empty cases
