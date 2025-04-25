@@ -74,8 +74,10 @@ jobs:
           aws configure set aws_secret_access_key "$AWS_SECRET_ACCESS_KEY"
           aws configure set region "$AWS_DEFAULT_REGION"
 
-      - name: Create reports directory
-        run: mkdir -p reports
+      - name: Create directories
+        run: |
+          mkdir -p reports
+          mkdir -p test/load/logs
 
       - name: Run Artillery test
         id: run_test
@@ -94,8 +96,10 @@ jobs:
           JSON_REPORT="reports/${TEST}-${ENV}-${TS}.json"
           ERROR_REPORT="reports/${TEST}-${ENV}-${TS}-errors.csv"
           DETAILED_ERROR_LOG="reports/${TEST}-${ENV}-${TS}-detailed-errors.log"
+          PROCESSOR_LOG_DIR="test/load/logs/${TEST}-${ENV}-${TS}"
           S3_JSON="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/json/${TEST}-${ENV}-${TS}.json"
           S3_DETAILED="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/logs/${TEST}-${ENV}-${TS}-detailed-errors.log"
+          S3_PROCESSOR_LOGS="s3://${{ secrets.TESTNET_S3_BUCKET_NAME }}/${ENV}/processor-logs/${TEST}-${ENV}-${TS}/"
           CONFIG="test/load/configs/${TEST}.yml"
 
           # Set environment variables
@@ -107,37 +111,48 @@ jobs:
             export API_KEY="$MAINNET_API_KEY"
           fi
 
-          # Run Artillery
+          # Run Artillery with response storage
           echo "▶ Starting load test: ${TEST} on ${ENV}"
           artillery run \
             --environment "$ENV" \
             --record --key "$ARTILLERY_API_KEY" \
             --output "$JSON_REPORT" \
+            --config "test/load/configs/artillery-config.yml" \
             "$CONFIG"
 
           # Generate error reports
           echo "⚡ Generating error reports..."
-          # CSV with counts (handle empty cases)
+
+          # Enhanced CSV report
           jq -r '
-            (["status_code", "count"] | @csv),
-            (.aggregate.codes // {} | to_entries[] | [.key, .value] | @csv)
+            ["status_code", "error_type", "count"],
+            (.aggregate.codes | to_entries[] | 
+              [.key, 
+              (if .key >= 500 then "server-error" 
+               elif .key >= 400 then "client-error" 
+               else "other" end), 
+              .value] | @csv)
           ' "$JSON_REPORT" > "$ERROR_REPORT"
 
-          # Corrected detailed error log with proper field paths
-          echo "Generating detailed error log..."
+          # Improved detailed error log
           jq --arg env "$ENV" -r '
             (.intermediate // [])[] | 
-            select((.response.statusCode? // 0) >= 400) |
+            select(.response.status >= 400) |
             "==========================\n" +
             "[\(.timestamp)]\n" +
             "Environment: \($env)\n" +
-            "Status: \(.response.statusCode // "unknown")\n" +
-            "URL: \(.request.url? // "unknown")\n" +
-            "Request Body:\n\(.request.body? // "{}" | if type == "string" then . else tojson end)\n" +
-            "Response Body:\n\(.response.body? // "{}" | if type == "string" then . else tojson end)\n"
+            "Status: \(.response.status)\n" +
+            "URL: \(.request.url // "unknown")\n" +
+            "Request Body:\n\(.request.json? // {} | tojson)\n" +
+            "Response Body:\n\(.response.body? // {} | 
+              if type == "string" then . else tojson end)\n"
           ' "$JSON_REPORT" > "$DETAILED_ERROR_LOG"
 
-          # Add final separator and handle empty cases
+          # Add processor logs
+          mkdir -p "$PROCESSOR_LOG_DIR"
+          cp test/load/logs/*.log "$PROCESSOR_LOG_DIR" 2>/dev/null || true
+
+          # Finalize error log
           if [ -s "$DETAILED_ERROR_LOG" ]; then
             echo -e "\n==========================" >> "$DETAILED_ERROR_LOG"
           else
@@ -149,8 +164,10 @@ jobs:
           echo "json_path=$JSON_REPORT" >> $GITHUB_OUTPUT
           echo "error_path=$ERROR_REPORT" >> $GITHUB_OUTPUT
           echo "detailed_error_path=$DETAILED_ERROR_LOG" >> $GITHUB_OUTPUT
+          echo "processor_logs_dir=$PROCESSOR_LOG_DIR" >> $GITHUB_OUTPUT
           echo "s3_json=$S3_JSON" >> $GITHUB_OUTPUT
           echo "s3_detailed=$S3_DETAILED" >> $GITHUB_OUTPUT
+          echo "s3_processor_logs=$S3_PROCESSOR_LOGS" >> $GITHUB_OUTPUT
           echo "timestamp=$TS" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
@@ -161,14 +178,18 @@ jobs:
             ${{ steps.run_test.outputs.json_path }}
             ${{ steps.run_test.outputs.error_path }}
             ${{ steps.run_test.outputs.detailed_error_path }}
+            ${{ steps.run_test.outputs.processor_logs_dir }}
 
       - name: Upload to S3
         run: |
           aws s3 cp "${{ steps.run_test.outputs.json_path }}" "${{ steps.run_test.outputs.s3_json }}"
           aws s3 cp "${{ steps.run_test.outputs.detailed_error_path }}" "${{ steps.run_test.outputs.s3_detailed }}"
+          aws s3 sync "${{ steps.run_test.outputs.processor_logs_dir }}" "${{ steps.run_test.outputs.s3_processor_logs }}"
 
-      - name: Cleanup reports
-        run: rm -rf reports/
+      - name: Cleanup
+        run: |
+          rm -rf reports/
+          rm -rf test/load/logs/*
 
       - name: Show report URLs
         run: |
@@ -176,3 +197,4 @@ jobs:
           echo "📄 JSON Report: ${{ steps.run_test.outputs.json_path }}"
           echo "❌ Error Report: ${{ steps.run_test.outputs.error_path }}"
           echo "📝 Detailed Error Log: ${{ steps.run_test.outputs.detailed_error_path }}"
+          echo "🔧 Processor Logs: ${{ steps.run_test.outputs.s3_processor_logs }}"

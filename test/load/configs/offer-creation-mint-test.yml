@@ -1,6 +1,6 @@
 config:
   target: "{{ target }}"
-  processor: "../error-processor.js"
+  processor: "./error-processor.js"
   phases:
     # Cycle 1 (0-90s)
     - { duration: 10, arrivalRate: 125, rampTo: 150, name: "Sine Rise 1" }
